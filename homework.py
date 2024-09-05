@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from telebot import TeleBot
 from telebot.apihelper import ApiException
 
+from exceptions import ApiStatusCodeError
+
 load_dotenv()
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -58,7 +60,7 @@ def send_message(bot, message):
 def get_api_answer(timestamp):
     """Возвращает ответ на запрос к API."""
     logger.debug(f'Отправляю запрос к API {ENDPOINT} ...')
-    message = f'{ENDPOINT} недоступен.'
+    message = f'(Unix-время {timestamp}) {ENDPOINT} недоступен.'
     try:
         response = requests.get(
             ENDPOINT,
@@ -67,13 +69,12 @@ def get_api_answer(timestamp):
         )
     except requests.RequestException:
         raise ConnectionError(message)
-    else:
-        if not response.status_code == HTTPStatus.OK:
-            raise ConnectionError(
-                f'{message} Код ответа API: {response.status_code}')
-        logger.debug('Запрос к API выполнен успешно.')
+    if not response.status_code == HTTPStatus.OK:
+        raise ApiStatusCodeError(
+            f'{message} Код ответа API: {response.status_code}')
+    logger.debug('Запрос к API выполнен успешно.')
 
-        return response.json()
+    return response.json()
 
 
 def check_response(response):
@@ -81,15 +82,16 @@ def check_response(response):
     logger.debug('Проверяю ответ от API...')
     if not isinstance(response, dict):
         raise TypeError(
-            (f'Тип данных в ответе - {type(response)} '
-             'не соответствует ожидаемому.')
+            (f'В ответе API тип данных - {type(response)} '
+             f'не соответствует ожидаемому {dict}.')
         )
     if 'homeworks' not in response:
         raise KeyError('В ответе API отсутствует ключ "homeworks".')
     if not isinstance(response['homeworks'], list):
         raise TypeError(
-            (f'Тип данных в ответе - {type(response["homeworks"])} '
-             'не соответствует ожидаемому.')
+            (f'В ответе API под ключом "homeworks" '
+             f'тип данных - {type(response["homeworks"])} '
+             f'не соответствует ожидаемому {list}.')
         )
     logger.debug('Проверка ответа от API выполнена успешно.')
 
@@ -110,7 +112,7 @@ def parse_status(homework):
         )
     homework_status = homework['status']
     if homework_status not in HOMEWORK_VERDICTS:
-        raise KeyError(f'Неизвестный статус проверки - {homework_status}.')
+        raise ValueError(f'Неизвестный статус проверки - {homework_status}.')
     verdict = HOMEWORK_VERDICTS[homework_status]
     logger.debug('Проверка изменения статуса проверки работы выполнена.')
 
@@ -123,31 +125,30 @@ def main():
 
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    current_status = ''
+    last_sent_message = ''
 
     while True:
         try:
             api_answer = get_api_answer(timestamp)
             check_response(api_answer)
-            timestamp = api_answer['current_date']
-            if api_answer['homeworks']:
-                homework = api_answer['homeworks'][0]
-                homework_status = parse_status(homework)
-                if current_status != homework_status:
-                    send_message(bot, homework_status)
-                    current_status = homework_status
-            else:
-                logger.debug('Статус не обновился.')
+            homeworks = api_answer['homeworks']
+            if not homeworks:
+                logger.info('Статус не обновился.')
                 continue
+            last_homework = homeworks[0]
+            last_homework_status = parse_status(last_homework)
+            send_message(bot, last_homework_status)
+            last_sent_message = last_homework_status
+            timestamp = api_answer.get('current_date', timestamp)
         except (ApiException, requests.exceptions.RequestException) as error:
             logger.exception(f'Сбой при отправке сообщения: {error}')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.exception(error)
-            if message not in current_status:
+            if message != last_sent_message:
                 with suppress():
                     send_message(bot, message)
-                    current_status = message
+                    last_sent_message = message
         finally:
             time.sleep(RETRY_PERIOD)
 
