@@ -67,8 +67,8 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=f'from_date={timestamp}'
         )
-    except requests.RequestException:
-        raise ConnectionError(message)
+    except requests.RequestException as error:
+        raise ConnectionError(f'{message} Ошибка: {error}')
     if not response.status_code == HTTPStatus.OK:
         raise ApiStatusCodeError(
             f'{message} Код ответа API: {response.status_code}')
@@ -140,13 +140,14 @@ def main():
             send_message(bot, last_homework_status)
             last_sent_message = last_homework_status
             timestamp = api_answer.get('current_date', timestamp)
-        except (ApiException, requests.exceptions.RequestException) as error:
+        except (ApiException, requests.RequestException) as error:
             logger.exception(f'Сбой при отправке сообщения: {error}')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.exception(error)
             if message != last_sent_message:
-                with suppress():
+                with suppress(
+                        ApiException, requests.RequestException):
                     send_message(bot, message)
                     last_sent_message = message
         finally:
